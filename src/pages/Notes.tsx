@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Upload, Search, Download, Heart, Bookmark, Star, FileText, Loader2, Eye } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { Upload, Search, Download, Heart, Star, FileText, Loader2, Eye } from 'lucide-react';
+import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useToast } from '@/hooks/use-toast';
 import { PageHeader, EmptyState } from '@/components/PageHeader';
@@ -10,12 +10,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription,
-} from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { BRANCHES, SUBJECTS, timeAgo } from '@/lib/constants';
 import type { Note } from '@/lib/types';
 
@@ -30,29 +26,17 @@ export function Notes() {
   const [sortBy, setSortBy] = useState('latest');
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [form, setForm] = useState({
-    title: '', description: '', subject: '', branch: '', semester: '', department: '',
-  });
+  const [form, setForm] = useState({ title: '', description: '', subject: '', branch: '', semester: '', department: '' });
   const [file, setFile] = useState<File | null>(null);
 
   const loadNotes = useCallback(async () => {
     setLoading(true);
-    let query = supabase
-      .from('notes')
-      .select('*, profiles!inner(id, full_name, avatar_url, branch, semester)')
-      .eq('status', 'approved');
-
-    if (branchFilter !== 'all') query = query.eq('branch', branchFilter);
-    if (subjectFilter !== 'all') query = query.eq('subject', subjectFilter);
-    if (search) query = query.or(`title.ilike.%${search}%,description.ilike.%${search}%`);
-
-    if (sortBy === 'latest') query = query.order('created_at', { ascending: false });
-    else if (sortBy === 'downloads') query = query.order('downloads', { ascending: false });
-    else if (sortBy === 'likes') query = query.order('likes', { ascending: false });
-    else if (sortBy === 'rating') query = query.order('rating_sum', { ascending: false });
-
-    const { data } = await query.limit(50);
-    setNotes((data as unknown as Note[]) || []);
+    const params = new URLSearchParams({ sortBy });
+    if (branchFilter !== 'all') params.set('branch', branchFilter);
+    if (subjectFilter !== 'all') params.set('subject', subjectFilter);
+    if (search) params.set('search', search);
+    const { data } = await api.get(`/api/notes?${params}`);
+    setNotes(data || []);
     setLoading(false);
   }, [branchFilter, subjectFilter, search, sortBy]);
 
@@ -62,62 +46,46 @@ export function Notes() {
     if (!file || !session) return;
     setUploading(true);
     try {
-      const ext = file.name.split('.').pop();
-      const filePath = `${session.user.id}/${Date.now()}.${ext}`;
-      const { error: storageError } = await supabase.storage
-        .from('notes')
-        .upload(filePath, file);
-      if (storageError) throw storageError;
-      const { data: { publicUrl } } = supabase.storage.from('notes').getPublicUrl(filePath);
-
-      const { error } = await supabase.from('notes').insert({
-        user_id: session.user.id,
-        title: form.title,
-        description: form.description,
-        file_url: publicUrl,
-        file_type: ext || '',
-        file_name: file.name,
-        file_size: file.size,
-        subject: form.subject,
-        branch: form.branch,
-        semester: form.semester ? parseInt(form.semester) : null,
-        department: form.department || profile?.department || '',
-        status: 'pending',
-      });
-      if (error) throw error;
-
-      toast({ title: 'Note uploaded!', description: 'Your note is pending admin approval.' });
-      setUploadOpen(false);
-      setForm({ title: '', description: '', subject: '', branch: '', semester: '', department: '' });
-      setFile(null);
+      const ext = file.name.split('.').pop() || '';
+      // For file storage we use a base64 data URL approach (no cloud storage in this migration)
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const file_url = e.target?.result as string;
+        await api.post('/api/notes', {
+          title: form.title,
+          description: form.description,
+          file_url,
+          file_type: ext,
+          file_name: file.name,
+          file_size: file.size,
+          subject: form.subject,
+          branch: form.branch,
+          semester: form.semester ? parseInt(form.semester) : null,
+          department: form.department || profile?.department || '',
+          status: 'pending',
+        });
+        toast({ title: 'Note uploaded!', description: 'Your note is pending admin approval.' });
+        setUploadOpen(false);
+        setForm({ title: '', description: '', subject: '', branch: '', semester: '', department: '' });
+        setFile(null);
+        setUploading(false);
+        loadNotes();
+      };
+      reader.readAsDataURL(file);
     } catch (err) {
       toast({ title: 'Upload failed', description: (err as Error).message, variant: 'destructive' });
+      setUploading(false);
     }
-    setUploading(false);
   };
 
   const handleLike = async (note: Note) => {
     if (!session) return;
-    const existing = await supabase
-      .from('user_notes')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .eq('note_id', note.id)
-      .maybeSingle();
-
-    if (existing.data) {
-      const newLiked = !existing.data.liked;
-      await supabase.from('user_notes').update({ liked: newLiked }).eq('id', existing.data.id);
-      await supabase.from('notes').update({ likes: note.likes + (newLiked ? 1 : -1) }).eq('id', note.id);
-    } else {
-      await supabase.from('user_notes').insert({ user_id: session.user.id, note_id: note.id, liked: true });
-      await supabase.from('notes').update({ likes: note.likes + 1 }).eq('id', note.id);
-    }
+    await api.post(`/api/notes/${note.id}/like`);
     loadNotes();
   };
 
   const handleDownload = async (note: Note) => {
-    await supabase.from('notes').update({ downloads: note.downloads + 1 }).eq('id', note.id);
+    await api.post(`/api/notes/${note.id}/download`);
     window.open(note.file_url, '_blank');
     loadNotes();
   };
@@ -135,48 +103,31 @@ export function Notes() {
               <DialogDescription>Your note will be reviewed by an admin before going public.</DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Title</Label>
-                <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Data Structures - Linked Lists" />
-              </div>
-              <div className="space-y-2">
-                <Label>Description</Label>
-                <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Brief description of the notes..." />
-              </div>
+              <div className="space-y-2"><Label>Title</Label><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Data Structures - Linked Lists" /></div>
+              <div className="space-y-2"><Label>Description</Label><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Subject</Label>
                   <Select value={form.subject} onValueChange={(v) => setForm({ ...form, subject: v })}>
                     <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                    <SelectContent>
-                      {SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                    </SelectContent>
+                    <SelectContent>{SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
                   <Label>Branch</Label>
                   <Select value={form.branch} onValueChange={(v) => setForm({ ...form, branch: v })}>
                     <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                    <SelectContent>
-                      {BRANCHES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}
-                    </SelectContent>
+                    <SelectContent>{BRANCHES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label>Semester</Label>
-                  <Input type="number" min="1" max="8" value={form.semester} onChange={(e) => setForm({ ...form, semester: e.target.value })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>File (PDF, DOCX, PPT)</Label>
-                  <Input type="file" accept=".pdf,.docx,.ppt,.pptx" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-                </div>
+                <div className="space-y-2"><Label>Semester</Label><Input type="number" min="1" max="8" value={form.semester} onChange={(e) => setForm({ ...form, semester: e.target.value })} /></div>
+                <div className="space-y-2"><Label>File (PDF, DOCX, PPT)</Label><Input type="file" accept=".pdf,.docx,.ppt,.pptx" onChange={(e) => setFile(e.target.files?.[0] || null)} /></div>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setUploadOpen(false)}>Cancel</Button>
               <Button onClick={handleUpload} disabled={uploading || !file || !form.title || !form.subject}>
-                {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-                Upload
+                {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}Upload
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -190,17 +141,11 @@ export function Notes() {
         </div>
         <Select value={branchFilter} onValueChange={setBranchFilter}>
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Branch" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Branches</SelectItem>
-            {BRANCHES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}
-          </SelectContent>
+          <SelectContent><SelectItem value="all">All Branches</SelectItem>{BRANCHES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
         </Select>
         <Select value={subjectFilter} onValueChange={setSubjectFilter}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Subject" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Subjects</SelectItem>
-            {SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-          </SelectContent>
+          <SelectContent><SelectItem value="all">All Subjects</SelectItem>{SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
         </Select>
         <Select value={sortBy} onValueChange={setSortBy}>
           <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
@@ -225,10 +170,8 @@ export function Notes() {
               <Card key={note.id} className="flex flex-col transition-shadow hover:shadow-md">
                 <CardContent className="flex flex-1 flex-col p-5">
                   <div className="mb-3 flex items-start justify-between">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                      <FileText className="h-5 w-5 text-primary" />
-                    </div>
-                    <Badge variant="secondary">{note.file_type.toUpperCase()}</Badge>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10"><FileText className="h-5 w-5 text-primary" /></div>
+                    <Badge variant="secondary">{(note.file_type || 'file').toUpperCase()}</Badge>
                   </div>
                   <h3 className="mb-1 font-semibold leading-tight">{note.title}</h3>
                   <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">{note.description || 'No description'}</p>
@@ -249,12 +192,8 @@ export function Notes() {
                       <span className="flex items-center gap-1"><Star className="h-3.5 w-3.5" />{avgRating}</span>
                     </div>
                     <div className="flex gap-1">
-                      <Button size="icon" variant="ghost" onClick={() => handleLike(note)}>
-                        <Heart className="h-4 w-4" />
-                      </Button>
-                      <Button size="icon" variant="ghost" onClick={() => handleDownload(note)}>
-                        <Download className="h-4 w-4" />
-                      </Button>
+                      <Button size="icon" variant="ghost" onClick={() => handleLike(note)}><Heart className="h-4 w-4" /></Button>
+                      <Button size="icon" variant="ghost" onClick={() => handleDownload(note)}><Download className="h-4 w-4" /></Button>
                     </div>
                   </div>
                 </CardContent>

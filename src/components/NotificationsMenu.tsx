@@ -1,14 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Bell } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import type { Notification } from '@/lib/types';
 import { timeAgo } from '@/lib/constants';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
@@ -19,27 +15,16 @@ export function NotificationsMenu() {
 
   useEffect(() => {
     if (!session) return;
-    const load = async () => {
-      const { data } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false })
-        .limit(20);
-      if (data) setNotifications(data as Notification[]);
-    };
-    load();
+    api.get('/api/notifications')
+      .then((res) => setNotifications(res.data || []))
+      .catch(() => {});
   }, [session]);
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
   const markAllRead = async () => {
     if (!session) return;
-    await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('user_id', session.user.id)
-      .eq('is_read', false);
+    await api.patch('/api/notifications/mark-all-read');
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
   };
 
@@ -59,43 +44,23 @@ export function NotificationsMenu() {
         <div className="flex items-center justify-between border-b p-3">
           <p className="font-semibold">Notifications</p>
           {unreadCount > 0 && (
-            <button
-              onClick={markAllRead}
-              className="text-xs text-primary hover:underline"
-            >
+            <button onClick={markAllRead} className="text-xs text-primary hover:underline">
               Mark all read
             </button>
           )}
         </div>
         <ScrollArea className="h-80">
           {notifications.length === 0 ? (
-            <div className="p-6 text-center text-sm text-muted-foreground">
-              No notifications yet
-            </div>
+            <div className="p-6 text-center text-sm text-muted-foreground">No notifications yet</div>
           ) : (
             <div className="divide-y">
               {notifications.map((n) => (
-                <div
-                  key={n.id}
-                  className={cn(
-                    'flex gap-3 p-3 transition-colors hover:bg-accent/50',
-                    !n.is_read && 'bg-primary/5'
-                  )}
-                >
-                  <div
-                    className={cn(
-                      'mt-1.5 h-2 w-2 shrink-0 rounded-full',
-                      n.is_read ? 'bg-transparent' : 'bg-primary'
-                    )}
-                  />
+                <div key={n.id} className={cn('flex gap-3 p-3 transition-colors hover:bg-accent/50', !n.is_read && 'bg-primary/5')}>
+                  <div className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', n.is_read ? 'bg-transparent' : 'bg-primary')} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium">{n.title}</p>
-                    {n.message && (
-                      <p className="text-xs text-muted-foreground">{n.message}</p>
-                    )}
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {timeAgo(n.created_at)}
-                    </p>
+                    {n.message && <p className="text-xs text-muted-foreground">{n.message}</p>}
+                    <p className="mt-1 text-xs text-muted-foreground">{timeAgo(n.created_at)}</p>
                   </div>
                 </div>
               ))}

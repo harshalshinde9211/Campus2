@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Search, BookOpen, Download, ExternalLink, Star, Loader2, Bookmark } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { Search, BookOpen, Download, ExternalLink, Star, Loader2 } from 'lucide-react';
+import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useToast } from '@/hooks/use-toast';
 import { PageHeader, EmptyState } from '@/components/PageHeader';
@@ -10,12 +10,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription,
-} from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { BRANCHES, SUBJECTS, timeAgo } from '@/lib/constants';
 import type { Resource } from '@/lib/types';
 
@@ -36,23 +32,18 @@ export function Resources() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [subjectFilter, setSubjectFilter] = useState('all');
   const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({
-    title: '', description: '', resource_type: 'chapter_notes', subject: '', branch: '', semester: '', external_url: '',
-  });
+  const [form, setForm] = useState({ title: '', description: '', resource_type: 'chapter_notes', subject: '', branch: '', semester: '', external_url: '' });
 
   const isFaculty = profile?.role === 'faculty';
 
   const load = useCallback(async () => {
     setLoading(true);
-    let query = supabase
-      .from('resources')
-      .select('*, profiles!inner(id, full_name, avatar_url)');
-    if (typeFilter !== 'all') query = query.eq('resource_type', typeFilter);
-    if (subjectFilter !== 'all') query = query.eq('subject', subjectFilter);
-    if (search) query = query.or(`title.ilike.%${search}%,description.ilike.%${search}%`);
-    query = query.order('created_at', { ascending: false }).limit(50);
-    const { data } = await query;
-    setResources((data as unknown as Resource[]) || []);
+    const params = new URLSearchParams();
+    if (typeFilter !== 'all') params.set('type', typeFilter);
+    if (subjectFilter !== 'all') params.set('subject', subjectFilter);
+    if (search) params.set('search', search);
+    const { data } = await api.get(`/api/resources?${params}`);
+    setResources(data || []);
     setLoading(false);
   }, [typeFilter, subjectFilter, search]);
 
@@ -60,15 +51,7 @@ export function Resources() {
 
   const handleAdd = async () => {
     try {
-      await supabase.from('resources').insert({
-        title: form.title,
-        description: form.description,
-        resource_type: form.resource_type,
-        subject: form.subject,
-        branch: form.branch,
-        semester: form.semester ? parseInt(form.semester) : null,
-        external_url: form.external_url,
-      });
+      await api.post('/api/resources', { ...form, semester: form.semester ? parseInt(form.semester) : null });
       toast({ title: 'Resource added!' });
       setAddOpen(false);
       setForm({ title: '', description: '', resource_type: 'chapter_notes', subject: '', branch: '', semester: '', external_url: '' });
@@ -83,60 +66,37 @@ export function Resources() {
       <PageHeader title="Study Resource Center" description="Chapter notes, important questions, PYQs, and reference materials.">
         {isFaculty && (
           <Dialog open={addOpen} onOpenChange={setAddOpen}>
-            <DialogTrigger asChild>
-              <Button><BookOpen className="mr-2 h-4 w-4" /> Add Resource</Button>
-            </DialogTrigger>
+            <DialogTrigger asChild><Button><BookOpen className="mr-2 h-4 w-4" /> Add Resource</Button></DialogTrigger>
             <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add Study Resource</DialogTitle>
-                <DialogDescription>Add study material for students.</DialogDescription>
-              </DialogHeader>
+              <DialogHeader><DialogTitle>Add Study Resource</DialogTitle><DialogDescription>Add study material for students.</DialogDescription></DialogHeader>
               <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Title</Label>
-                  <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Description</Label>
-                  <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-                </div>
+                <div className="space-y-2"><Label>Title</Label><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
+                <div className="space-y-2"><Label>Description</Label><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Type</Label>
                     <Select value={form.resource_type} onValueChange={(v) => setForm({ ...form, resource_type: v })}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {RESOURCE_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
-                      </SelectContent>
+                      <SelectContent>{RESOURCE_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
                     <Label>Subject</Label>
                     <Select value={form.subject} onValueChange={(v) => setForm({ ...form, subject: v })}>
                       <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                      <SelectContent>
-                        {SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                      </SelectContent>
+                      <SelectContent>{SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
                     <Label>Branch</Label>
                     <Select value={form.branch} onValueChange={(v) => setForm({ ...form, branch: v })}>
                       <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                      <SelectContent>
-                        {BRANCHES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}
-                      </SelectContent>
+                      <SelectContent>{BRANCHES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Semester</Label>
-                    <Input type="number" min="1" max="8" value={form.semester} onChange={(e) => setForm({ ...form, semester: e.target.value })} />
-                  </div>
+                  <div className="space-y-2"><Label>Semester</Label><Input type="number" min="1" max="8" value={form.semester} onChange={(e) => setForm({ ...form, semester: e.target.value })} /></div>
                 </div>
-                <div className="space-y-2">
-                  <Label>External URL (optional)</Label>
-                  <Input value={form.external_url} onChange={(e) => setForm({ ...form, external_url: e.target.value })} placeholder="https://..." />
-                </div>
+                <div className="space-y-2"><Label>External URL (optional)</Label><Input value={form.external_url} onChange={(e) => setForm({ ...form, external_url: e.target.value })} placeholder="https://..." /></div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
@@ -154,17 +114,11 @@ export function Resources() {
         </div>
         <Select value={typeFilter} onValueChange={setTypeFilter}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Type" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Types</SelectItem>
-            {RESOURCE_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
-          </SelectContent>
+          <SelectContent><SelectItem value="all">All Types</SelectItem>{RESOURCE_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
         </Select>
         <Select value={subjectFilter} onValueChange={setSubjectFilter}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Subject" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Subjects</SelectItem>
-            {SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-          </SelectContent>
+          <SelectContent><SelectItem value="all">All Subjects</SelectItem>{SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
         </Select>
       </div>
 
@@ -181,9 +135,7 @@ export function Resources() {
               <Card key={res.id} className="flex flex-col transition-shadow hover:shadow-md">
                 <CardContent className="flex flex-1 flex-col p-5">
                   <div className="mb-3 flex items-start justify-between">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                      <BookOpen className="h-5 w-5 text-primary" />
-                    </div>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10"><BookOpen className="h-5 w-5 text-primary" /></div>
                     <Badge variant="secondary">{typeLabel}</Badge>
                   </div>
                   <h3 className="mb-1 font-semibold leading-tight">{res.title}</h3>
@@ -193,9 +145,7 @@ export function Resources() {
                     {res.branch && <Badge variant="outline">{res.branch}</Badge>}
                     {res.semester && <Badge variant="outline">Sem {res.semester}</Badge>}
                   </div>
-                  <div className="mb-3 text-xs text-muted-foreground">
-                    by {res.profiles?.full_name || 'Faculty'} · {timeAgo(res.created_at)}
-                  </div>
+                  <div className="mb-3 text-xs text-muted-foreground">by {res.profiles?.full_name || 'Faculty'} · {timeAgo(res.created_at)}</div>
                   <div className="mt-auto flex items-center justify-between border-t pt-3">
                     <div className="flex items-center gap-3 text-sm text-muted-foreground">
                       <span className="flex items-center gap-1"><Star className="h-3.5 w-3.5" />{avgRating}</span>

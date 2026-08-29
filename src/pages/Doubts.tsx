@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Search, HelpCircle, Plus, ThumbsUp, ThumbsDown, Check, Loader2, MessageSquare } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useToast } from '@/hooks/use-toast';
 import { PageHeader, EmptyState } from '@/components/PageHeader';
@@ -11,9 +11,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { SUBJECTS, timeAgo } from '@/lib/constants';
 import type { Doubt, DoubtAnswer } from '@/lib/types';
 
@@ -33,14 +32,11 @@ export function Doubts() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    let query = supabase
-      .from('doubts')
-      .select('*, profiles!inner(id, full_name, avatar_url, role)')
-      .order('created_at', { ascending: false });
-    if (subjectFilter !== 'all') query = query.eq('subject', subjectFilter);
-    if (search) query = query.or(`title.ilike.%${search}%,description.ilike.%${search}%`);
-    const { data } = await query.limit(50);
-    setDoubts((data as unknown as Doubt[]) || []);
+    const params = new URLSearchParams();
+    if (subjectFilter !== 'all') params.set('subject', subjectFilter);
+    if (search) params.set('search', search);
+    const { data } = await api.get(`/api/doubts?${params}`);
+    setDoubts(data || []);
     setLoading(false);
   }, [subjectFilter, search]);
 
@@ -49,8 +45,7 @@ export function Doubts() {
   const handleAdd = async () => {
     if (!session) return;
     try {
-      await supabase.from('doubts').insert({
-        user_id: session.user.id,
+      await api.post('/api/doubts', {
         title: form.title,
         description: form.description,
         subject: form.subject,
@@ -69,40 +64,28 @@ export function Doubts() {
   const openDoubt = async (doubt: Doubt) => {
     setSelectedDoubt(doubt);
     setAnswersLoading(true);
-    await supabase.from('doubts').update({ views: doubt.views + 1 }).eq('id', doubt.id);
-    const { data } = await supabase
-      .from('doubt_answers')
-      .select('*, profiles!inner(id, full_name, avatar_url, role)')
-      .eq('doubt_id', doubt.id)
-      .order('is_best', { ascending: false })
-      .order('created_at', { ascending: true });
-    setAnswers((data as unknown as DoubtAnswer[]) || []);
+    await api.patch(`/api/doubts/${doubt.id}`, { views: doubt.views + 1 });
+    const { data } = await api.get(`/api/doubts/${doubt.id}/answers`);
+    setAnswers(data || []);
     setAnswersLoading(false);
   };
 
   const handleAnswer = async () => {
     if (!session || !selectedDoubt || !newAnswer) return;
-    await supabase.from('doubt_answers').insert({
-      doubt_id: selectedDoubt.id,
-      user_id: session.user.id,
-      content: newAnswer,
-    });
-    await supabase.from('doubts').update({ answer_count: selectedDoubt.answer_count + 1 }).eq('id', selectedDoubt.id);
+    await api.post(`/api/doubts/${selectedDoubt.id}/answers`, { content: newAnswer });
     setNewAnswer('');
     openDoubt({ ...selectedDoubt, answer_count: selectedDoubt.answer_count + 1 });
   };
 
   const handleVote = async (answer: DoubtAnswer, type: 'up' | 'down') => {
     const field = type === 'up' ? 'upvotes' : 'downvotes';
-    await supabase.from('doubt_answers').update({ [field]: answer[field] + 1 }).eq('id', answer.id);
+    await api.patch(`/api/doubts/answers/${answer.id}`, { [field]: answer[field] + 1 });
     if (selectedDoubt) openDoubt(selectedDoubt);
   };
 
   const markBest = async (answer: DoubtAnswer) => {
     if (!session || !selectedDoubt || selectedDoubt.user_id !== session.user.id) return;
-    await supabase.from('doubt_answers').update({ is_best: false }).eq('doubt_id', selectedDoubt.id);
-    await supabase.from('doubt_answers').update({ is_best: true }).eq('id', answer.id);
-    await supabase.from('doubts').update({ best_answer_id: answer.id }).eq('id', selectedDoubt.id);
+    await api.post(`/api/doubts/${selectedDoubt.id}/answers/${answer.id}/best`);
     openDoubt(selectedDoubt);
   };
 
@@ -112,13 +95,10 @@ export function Doubts() {
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
           <DialogTrigger asChild><Button><Plus className="mr-2 h-4 w-4" /> Post Doubt</Button></DialogTrigger>
           <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Post a Doubt</DialogTitle>
-              <DialogDescription>Get help from peers, seniors, and faculty.</DialogDescription>
-            </DialogHeader>
+            <DialogHeader><DialogTitle>Post a Doubt</DialogTitle><DialogDescription>Get help from peers, seniors, and faculty.</DialogDescription></DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2"><Label>Title</Label><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="How does quicksort work?" /></div>
-              <div className="space-y-2"><Label>Description</Label><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Describe your doubt in detail..." /></div>
+              <div className="space-y-2"><Label>Description</Label><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Subject</Label>
@@ -127,9 +107,9 @@ export function Doubts() {
                     <SelectContent>{SUBJECTS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2"><Label>Topic</Label><Input value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })} placeholder="Sorting algorithms" /></div>
+                <div className="space-y-2"><Label>Topic</Label><Input value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })} /></div>
               </div>
-              <div className="space-y-2"><Label>Tags (comma-separated)</Label><Input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="algorithms, sorting" /></div>
+              <div className="space-y-2"><Label>Tags (comma-separated)</Label><Input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} /></div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
@@ -159,34 +139,28 @@ export function Doubts() {
             <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
           ) : doubts.length === 0 ? (
             <EmptyState icon={HelpCircle} title="No doubts yet" description="Be the first to post a doubt." />
-          ) : (
-            doubts.map((doubt) => (
-              <Card
-                key={doubt.id}
-                className={`cursor-pointer transition-shadow hover:shadow-md ${selectedDoubt?.id === doubt.id ? 'border-primary ring-1 ring-primary' : ''}`}
-                onClick={() => openDoubt(doubt)}
-              >
-                <CardContent className="p-5">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Avatar className="h-7 w-7"><AvatarFallback className="text-xs">{doubt.profiles?.full_name?.charAt(0) || 'U'}</AvatarFallback></Avatar>
-                    <span className="text-xs text-muted-foreground">{doubt.profiles?.full_name}</span>
-                    <Badge variant="outline" className="ml-1 capitalize text-xs">{doubt.profiles?.role}</Badge>
-                    <span className="ml-auto text-xs text-muted-foreground">{timeAgo(doubt.created_at)}</span>
-                  </div>
-                  <h3 className="mb-1 font-semibold">{doubt.title}</h3>
-                  <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">{doubt.description}</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {doubt.subject && <Badge variant="secondary">{doubt.subject}</Badge>}
-                    {doubt.topic && <Badge variant="outline">{doubt.topic}</Badge>}
-                    <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1"><MessageSquare className="h-3.5 w-3.5" />{doubt.answer_count}</span>
-                      <span className="flex items-center gap-1"><ThumbsUp className="h-3.5 w-3.5" />{doubt.upvotes}</span>
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
+          ) : doubts.map((doubt) => (
+            <Card key={doubt.id} className={`cursor-pointer transition-shadow hover:shadow-md ${selectedDoubt?.id === doubt.id ? 'border-primary ring-1 ring-primary' : ''}`} onClick={() => openDoubt(doubt)}>
+              <CardContent className="p-5">
+                <div className="mb-2 flex items-center gap-2">
+                  <Avatar className="h-7 w-7"><AvatarFallback className="text-xs">{doubt.profiles?.full_name?.charAt(0) || 'U'}</AvatarFallback></Avatar>
+                  <span className="text-xs text-muted-foreground">{doubt.profiles?.full_name}</span>
+                  <Badge variant="outline" className="ml-1 capitalize text-xs">{doubt.profiles?.role}</Badge>
+                  <span className="ml-auto text-xs text-muted-foreground">{timeAgo(doubt.created_at)}</span>
+                </div>
+                <h3 className="mb-1 font-semibold">{doubt.title}</h3>
+                <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">{doubt.description}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {doubt.subject && <Badge variant="secondary">{doubt.subject}</Badge>}
+                  {doubt.topic && <Badge variant="outline">{doubt.topic}</Badge>}
+                  <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1"><MessageSquare className="h-3.5 w-3.5" />{doubt.answer_count}</span>
+                    <span className="flex items-center gap-1"><ThumbsUp className="h-3.5 w-3.5" />{doubt.upvotes}</span>
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
         <div>
@@ -200,7 +174,6 @@ export function Doubts() {
                   {selectedDoubt.topic && <Badge variant="outline">{selectedDoubt.topic}</Badge>}
                   {selectedDoubt.tags?.map((t) => <Badge key={t} variant="outline">{t}</Badge>)}
                 </div>
-
                 <div className="mb-4 border-t pt-4">
                   <h3 className="mb-3 font-semibold">Answers ({answers.length})</h3>
                   {answersLoading ? (
@@ -231,7 +204,6 @@ export function Doubts() {
                     </div>
                   )}
                 </div>
-
                 {session && (
                   <div className="border-t pt-4">
                     <Textarea value={newAnswer} onChange={(e) => setNewAnswer(e.target.value)} placeholder="Write your answer..." className="mb-2" />

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Users, Search, Loader2, GraduationCap, Send, Check, X, Award } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { Users, Search, Loader2, Send, Check, X, Award } from 'lucide-react';
+import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useToast } from '@/hooks/use-toast';
 import { PageHeader, EmptyState } from '@/components/PageHeader';
@@ -9,9 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { BRANCHES, levelFromXp } from '@/lib/constants';
@@ -32,19 +31,17 @@ export function Networking() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    let query = supabase.from('profiles').select('*').neq('id', session?.user.id || '');
-    if (branchFilter !== 'all') query = query.eq('branch', branchFilter);
-    if (roleFilter !== 'all') query = query.eq('role', roleFilter);
-    if (search) query = query.or(`full_name.ilike.%${search}%,skills.cs.{${search}}`);
-    query = query.order('xp', { ascending: false }).limit(50);
-    const { data } = await query;
-    setUsers((data as Profile[]) || []);
+    const params = new URLSearchParams();
+    if (branchFilter !== 'all') params.set('branch', branchFilter);
+    if (roleFilter !== 'all') params.set('role', roleFilter);
+    if (search) params.set('search', search);
 
-    if (session) {
-      const { data: reqs } = await supabase.from('mentorship_requests')
-        .select('*').or(`junior_id.eq.${session.user.id},senior_id.eq.${session.user.id}`);
-      setRequests((reqs as MentorshipRequest[]) || []);
-    }
+    const [u, r] = await Promise.all([
+      api.get(`/api/users?${params}`).then(res => res.data).catch(() => []),
+      session ? api.get('/api/networking/requests').then(res => res.data).catch(() => []) : Promise.resolve([]),
+    ]);
+    setUsers(u);
+    setRequests(r);
     setLoading(false);
   }, [session, branchFilter, roleFilter, search]);
 
@@ -52,17 +49,7 @@ export function Networking() {
 
   const sendRequest = async () => {
     if (!session || !targetUser) return;
-    await supabase.from('mentorship_requests').insert({
-      junior_id: session.user.id,
-      senior_id: targetUser.id,
-      message,
-    });
-    await supabase.from('notifications').insert({
-      user_id: targetUser.id,
-      type: 'mentorship_request',
-      title: 'New Mentorship Request',
-      message: `${profile?.full_name} requested mentorship`,
-    });
+    await api.post('/api/networking/requests', { senior_id: targetUser.id, message });
     toast({ title: 'Mentorship request sent!' });
     setRequestOpen(false);
     setMessage('');
@@ -70,17 +57,17 @@ export function Networking() {
   };
 
   const updateRequest = async (req: MentorshipRequest, status: 'accepted' | 'rejected') => {
-    await supabase.from('mentorship_requests').update({ status }).eq('id', req.id);
+    await api.patch(`/api/networking/requests/${req.id}`, { status });
     load();
   };
 
-  const hasRequest = (userId: string) => requests.some((r) => r.senior_id === userId && r.junior_id === session?.user.id);
+  const hasRequest = (userId: string) =>
+    requests.some((r) => r.senior_id === userId && r.junior_id === session?.user.id);
 
   return (
     <div>
       <PageHeader title="Senior-Junior Networking" description="Connect with seniors, find mentors, and grow your network." />
 
-      {/* Incoming requests */}
       {requests.filter((r) => r.senior_id === session?.user.id && r.status === 'pending').length > 0 && (
         <Card className="mb-6">
           <CardContent className="p-5">

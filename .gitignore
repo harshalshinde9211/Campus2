@@ -24,7 +24,7 @@ pnpm-debug.log*
 
 # ── Markdown / docs (auto-generated, not needed in repo) ──────
 *.md
-!.env.example
+!README.md
 
 # ── OS files ─────────────────────────────────────────────────
 .DS_Store
